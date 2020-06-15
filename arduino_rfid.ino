@@ -20,7 +20,18 @@
 #define uid_size 7          // Usually uid is either 4 or 7 bytes
 #define rfid_timout 10      // Seconds to timeout for adding/deleting RFIDs
 #define mqtt_subscribe_topic "smartlock/+/set"
+#define unlock_timout 3     // Seconds to timeout for letting the door unlocked
 
+volatile long int encoder_pos = 0;
+
+// define Motor pins
+const int motor1Pin1 = 14;
+const int motor1Pin2 = 27;
+const int enable1Pin = 26;
+const int ENCPIN_Y = 25;
+const int ENCPIN_G = 33;
+unsigned long unlock_start_timer;
+String door_state;
 
 char topic_uid[] = "smartlock/rfid_uid";                  //message=[<uid>]
 char topic_status[] = "smartlock/status";                 //message=['online']
@@ -48,12 +59,25 @@ PubSubClient client;
 void setup() 
 {
   rfid_start_timer = millis();
+  unlock_start_timer = millis();
   EEPROM.begin(500);
 
   Serial.begin(115200);   // Initiate a serial communication
   Serial.println("Booting");
 
+  // Motor init
+  pinMode(ENCPIN_Y, INPUT);
+  pinMode(ENCPIN_G, INPUT);
   
+  pinMode(motor1Pin1, OUTPUT);
+  pinMode(motor1Pin2, OUTPUT);
+  pinMode(enable1Pin, OUTPUT);
+
+  attachInterrupt(digitalPinToInterrupt(ENCPIN_Y), encoder, RISING);
+
+//  pinMode(27, OUTPUT);
+//  digitalWrite(27, HIGH);
+//  
   // NFC init  
   SPI.begin();          // Initiate  SPI bus
   mfrc522.PCD_Init();   // Initiate MFRC522
@@ -127,6 +151,9 @@ void setup()
 
 void loop()
 {
+  if (millis() - unlock_start_timer >= unlock_timout * 1000 && door_state == "unlocked"){
+    turnMotor("lock");
+  }
   if (millis() - rfid_start_timer >= rfid_timout * 1000 && set_option != ""){
     if (set_option == "add_rfid") {
       client.publish(topic_timer_addrfid, "OFF");
@@ -144,6 +171,49 @@ void loop()
   readRFID();
 }
 
+//////////////////////////////////////// MOTOR //////////////////////////////
+
+void turnMotor(String moto_dir){
+  Serial.print("Encoder status: ");
+  Serial.println(encoder_pos);
+  if (moto_dir == "unlock") {
+    digitalWrite(enable1Pin, HIGH);
+    digitalWrite(motor1Pin1, LOW);
+    digitalWrite(motor1Pin2, HIGH);
+    door_state = "unlocked";
+  } else if (moto_dir == "lock") {
+    digitalWrite(enable1Pin, HIGH);
+    digitalWrite(motor1Pin1, HIGH);
+    digitalWrite(motor1Pin2, LOW);
+    door_state = "locked";
+  }
+  delay(5000);
+  stopMotor();
+
+  unlock_start_timer = millis();
+  Serial.println(door_state);
+}
+
+void stopMotor(){
+  digitalWrite(enable1Pin, LOW); 
+  digitalWrite(motor1Pin1, LOW);
+  digitalWrite(motor1Pin2, LOW);
+  Serial.print("Motor has stopped: ");
+  Serial.print("Encoder status: ");
+  Serial.println(encoder_pos);
+}
+
+void encoder(){
+  if(digitalRead(ENCPIN_G) == HIGH){
+    encoder_pos++;
+  }else{
+    encoder_pos--;
+  }
+  
+}
+
+
+//////////////////////////////////////// MQTT //////////////////////////////
 
 void mqtt_reconnect() {
   // Loop until we're reconnected
@@ -163,7 +233,6 @@ void mqtt_reconnect() {
     }
   }
 }
-
 
 void mqtt_callback(char* topic_char, byte* payload, unsigned int length) {
   String topic = topic_char;
@@ -232,12 +301,14 @@ void mqtt_callback(char* topic_char, byte* payload, unsigned int length) {
 }
 
 
+//////////////////////////////////////// RFID //////////////////////////////
+
 void readRFID(){
   // Look for new cards
   if ( ! mfrc522.PICC_IsNewCardPresent()){return;}
   // Select one of the cards
   if ( ! mfrc522.PICC_ReadCardSerial()) {return;}
-  
+  Serial.println('test');
   String uid_str = "";
   byte uid_byte[uid_size];
   char uid_char[mfrc522.uid.size];
@@ -269,9 +340,11 @@ void readRFID(){
   } else if ( findID(uid_byte) ) {
     Serial.println("Authorized");
     client.publish(topic_access, "authorized");
+    turnMotor("unlock");
   } else {
     Serial.println(" Denied");
     client.publish(topic_access, "denied");
+    stopMotor();
   }
   Serial.println();
   delay(1000);
