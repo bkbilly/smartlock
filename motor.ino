@@ -1,4 +1,4 @@
-`/*
+/*
  * 
  * Created by bkbilly
  * 
@@ -28,6 +28,7 @@ unsigned long encoder_timer;
 // define MQTT messages
 char topic_status[] = "smartlock/status";                 //message=['online']
 char set_topic_door[] = "smartlock/door/set";
+char get_topic_door[] = "smartlock/door/status";
 
 // define Globals
 String door_state;
@@ -54,6 +55,8 @@ void setup() {
   wifi_init();
   mqtt_init();
   ota_init();
+
+  Serial.println("Done with initializations... continue!");
 }
 
 void loop() {
@@ -62,6 +65,8 @@ void loop() {
     mqtt_reconnect();
   }
 
+  prev_encoder_pos = encoder_pos;
+  delay(10);
   // Stop motor when key has reached the end for 1 sec
   if (millis() - encoder_timer >= 1 * 1000 && encoder_status != "stopped"){
     if (encoder_pos == prev_encoder_pos) {
@@ -84,11 +89,13 @@ void turnMotor(String moto_dir){
     digitalWrite(motor1Pin2, HIGH);
     motor_status = "unlocking";
     door_state = "unlocked";
+    client.publish(get_topic_door,"unlocking");
   } else if (moto_dir == "lock") {
     digitalWrite(motor1Pin1, HIGH);
     digitalWrite(motor1Pin2, LOW);
     motor_status = "locking";
     door_state = "locked";
+    client.publish(get_topic_door,"locking");
   }
   // delay(10000);
   // stopMotor();
@@ -96,6 +103,7 @@ void turnMotor(String moto_dir){
 }
 
 void stopMotor(){
+  client.publish(get_topic_door,"stopped");
   digitalWrite(motor1Pin1, LOW);
   digitalWrite(motor1Pin2, LOW);
   motor_status = "stopped";
@@ -133,7 +141,7 @@ void mqtt_reconnect() {
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
-      delay(5000);
+//      delay(5000);
     }
   }
 }
@@ -153,6 +161,8 @@ void mqtt_callback(char* topic_char, byte* payload, unsigned int length) {
       turnMotor("unlock");
     } else if (message == "LOCK"){
       turnMotor("lock");
+    } else if (message == "STOP"){
+      stopMotor();
     }
   }
 
